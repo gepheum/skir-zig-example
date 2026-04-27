@@ -1,4 +1,5 @@
 const std = @import("std");
+const httpz = @import("httpz");
 const skir = @import("skir_client.zig");
 const service_mod = @import("skirout/service.zig");
 const user_mod = @import("skirout/user.zig");
@@ -81,6 +82,11 @@ fn addUser(
     return .{ .ok = service_mod.AddUserResponse.default };
 }
 
+const App = struct {
+    service: *const skir.Service(*UserStore),
+    user_store: *UserStore,
+};
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -105,163 +111,43 @@ pub fn main() !void {
         addUser,
     );
 
-    const listen_address = try std.net.Address.parseIp("0.0.0.0", 8787);
-    var server = try listen_address.listen(.{ .reuse_address = true });
+    var app = App{
+        .service = &service,
+        .user_store = &user_store,
+    };
+
+    var server = try httpz.Server(*App).init(allocator, .{
+        .address = .all(8787),
+        .request = .{ .max_body_size = 1024 * 1024 },
+    }, &app);
     defer server.deinit();
+    defer server.stop();
+
+    var router = try server.router(.{});
+    router.get("/", index, .{});
+    router.all("/myapi", myApi, .{});
 
     std.debug.print("Listening on http://localhost:8787/myapi\n", .{});
-
-    while (true) {
-        var conn = try server.accept();
-        defer conn.stream.close();
-        try handleConnection(allocator, &service, &user_store, conn.stream);
-    }
+    try server.listen();
 }
 
-fn handleConnection(
-    allocator: std.mem.Allocator,
-    service: *const skir.Service(*UserStore),
-    user_store: *UserStore,
-    stream: std.net.Stream,
-) !void {
-    var request_arena = std.heap.ArenaAllocator.init(allocator);
-    defer request_arena.deinit();
-    const request_allocator = request_arena.allocator();
-
-    const request_bytes = try readRequest(request_allocator, stream);
-    if (request_bytes.len == 0) {
-        return;
-    }
-
-    const headers_end = std.mem.indexOf(u8, request_bytes, "\r\n\r\n") orelse {
-        try writePlainTextResponse(stream, 400, "Bad Request", "bad request: malformed HTTP request");
-        return;
-    };
-
-    const header_block = request_bytes[0..headers_end];
-    const body = request_bytes[headers_end + 4 ..];
-
-    var header_lines = std.mem.splitSequence(u8, header_block, "\r\n");
-    const request_line = header_lines.next() orelse {
-        try writePlainTextResponse(stream, 400, "Bad Request", "bad request: missing request line");
-        return;
-    };
-
-    var line_parts = std.mem.splitScalar(u8, request_line, ' ');
-    const method = line_parts.next() orelse {
-        try writePlainTextResponse(stream, 400, "Bad Request", "bad request: malformed request line");
-        return;
-    };
-    const target = line_parts.next() orelse {
-        try writePlainTextResponse(stream, 400, "Bad Request", "bad request: malformed request line");
-        return;
-    };
-
-    if (std.mem.eql(u8, method, "GET") and std.mem.eql(u8, target, "/")) {
-        try writePlainTextResponse(stream, 200, "OK", "Hello, World!");
-        return;
-    }
-
-    if (!std.mem.startsWith(u8, target, "/myapi")) {
-        try writePlainTextResponse(stream, 404, "Not Found", "not found");
-        return;
-    }
-
-    const body_for_service = if (std.mem.eql(u8, method, "GET"))
-        try skir.getPercentDecodedQueryFromUrl(request_allocator, target)
-    else if (std.mem.eql(u8, method, "POST"))
-        body
-    else {
-        try writePlainTextResponse(stream, 405, "Method Not Allowed", "method not allowed");
-        return;
-    };
-
-    const raw_response = try service.handleRequest(request_allocator, body_for_service, user_store);
-    try writeRawResponse(stream, raw_response);
+fn index(_: *App, _: *httpz.Request, res: *httpz.Response) !void {
+    res.body = "Hello, World!";
 }
 
-fn readRequest(allocator: std.mem.Allocator, stream: std.net.Stream) ![]u8 {
-    var all = std.ArrayList(u8).empty;
-    var buffer: [8192]u8 = undefined;
-
-    while (true) {
-        const n = try stream.read(&buffer);
-        if (n == 0) break;
-        try all.appendSlice(allocator, buffer[0..n]);
-
-        if (all.items.len >= 4 and std.mem.indexOf(u8, all.items, "\r\n\r\n") != null) {
-            break;
-        }
-
-        if (all.items.len > 1024 * 1024) {
-            return error.RequestTooLarge;
-        }
-    }
-
-    const headers_end = std.mem.indexOf(u8, all.items, "\r\n\r\n") orelse {
-        return all.toOwnedSlice(allocator);
+fn myApi(app: *App, req: *httpz.Request, res: *httpz.Response) !void {
+    const body_for_service = switch (req.method) {
+        .GET => try skir.getPercentDecodedQueryFromUrl(req.arena, req.url.raw),
+        .POST => req.body() orelse "",
+        else => {
+            res.status = 405;
+            res.body = "method not allowed";
+            return;
+        },
     };
 
-    const header_block = all.items[0..headers_end];
-    const content_length = parseContentLength(header_block);
-    const wanted_len = headers_end + 4 + content_length;
-
-    while (all.items.len < wanted_len) {
-        const n = try stream.read(&buffer);
-        if (n == 0) break;
-        try all.appendSlice(allocator, buffer[0..n]);
-        if (all.items.len > 1024 * 1024) {
-            return error.RequestTooLarge;
-        }
-    }
-
-    return all.toOwnedSlice(allocator);
-}
-
-fn parseContentLength(header_block: []const u8) usize {
-    var it = std.mem.splitSequence(u8, header_block, "\r\n");
-    _ = it.next();
-
-    while (it.next()) |line| {
-        const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
-        const key = std.mem.trim(u8, line[0..colon], " ");
-        if (!std.ascii.eqlIgnoreCase(key, "content-length")) {
-            continue;
-        }
-        const value = std.mem.trim(u8, line[colon + 1 ..], " ");
-        return std.fmt.parseInt(usize, value, 10) catch 0;
-    }
-
-    return 0;
-}
-
-fn writeRawResponse(stream: std.net.Stream, raw: skir.RawResponse) !void {
-    var header_buf: [256]u8 = undefined;
-    const header = try std.fmt.bufPrint(
-        &header_buf,
-        "{s}\r\nContent-Type: {s}\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n",
-        .{ raw.status_line, raw.content_type, raw.data.len },
-    );
-    try stream.writeAll(header);
-    try stream.writeAll(raw.data);
-}
-
-fn writePlainTextResponse(
-    stream: std.net.Stream,
-    status_code: u16,
-    status_text: []const u8,
-    body: []const u8,
-) !void {
-    var line_buf: [64]u8 = undefined;
-    const status_line = try std.fmt.bufPrint(&line_buf, "HTTP/1.1 {d} {s}", .{ status_code, status_text });
-
-    var header_buf: [256]u8 = undefined;
-    const header = try std.fmt.bufPrint(
-        &header_buf,
-        "{s}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n",
-        .{ status_line, body.len },
-    );
-
-    try stream.writeAll(header);
-    try stream.writeAll(body);
+    const raw_response = try app.service.handleRequest(req.arena, body_for_service, app.user_store);
+    res.status = raw_response.status_code;
+    res.header("content-type", raw_response.content_type);
+    res.body = raw_response.data;
 }

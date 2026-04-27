@@ -10,6 +10,12 @@ pub fn build(b: *std.Build) void {
     });
     const skir_client_mod = skir_client_dep.module("skir_client");
 
+    const httpz_dep = b.dependency("httpz", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const httpz_mod = httpz_dep.module("httpz");
+
     const snippets_root_module = b.createModule(.{
         .root_source_file = b.path("src/snippets.zig"),
         .target = target,
@@ -28,6 +34,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     start_service_root_module.addImport("skir_client", skir_client_mod);
+    start_service_root_module.addImport("httpz", httpz_mod);
 
     const start_service_exe = b.addExecutable(.{
         .name = "start-service",

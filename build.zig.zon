@@ -7,6 +7,10 @@
         .skir_client = .{
             .path = "../zig-client",
         },
+        .httpz = .{
+            .url = "git+https://github.com/karlseguin/http.zig?ref=zig-0.15#1a4d53b95bc4ac6c84cbc081727428de40c8c635",
+            .hash = "httpz-0.0.0-PNVzrNVOBwDlxyffzwONpI9j9dYqKWXxopU1ZCLt4C09",
+        },
     },
     .paths = .{
         "build.zig",
