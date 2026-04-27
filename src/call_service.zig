@@ -1,3 +1,7 @@
+// How to run this example:
+// 1) In one terminal: zig build run-start-service
+// 2) In another terminal: zig build run-call-service
+
 const std = @import("std");
 const skir = @import("skir_client.zig");
 const service_mod = @import("skirout/service.zig");
