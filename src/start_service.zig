@@ -27,59 +27,59 @@ const UserStore = struct {
         }
         self.map.deinit();
     }
-
-    // Impl functions below match the signature expected by Service(*UserStore).addMethod:
-    //   fn(std.mem.Allocator, Request, *UserStore) MethodResult(Response)
-
-    fn getUser(
-        allocator: std.mem.Allocator,
-        request: service_mod.GetUserRequest,
-        store: *UserStore,
-    ) skir.MethodResult(service_mod.GetUserResponse) {
-        _ = allocator;
-        store.mutex.lock();
-        defer store.mutex.unlock();
-        const maybe_stored = store.map.getPtr(request.user_id);
-        return .{ .ok = .{ .user = if (maybe_stored) |s| s.user else null } };
-    }
-
-    fn addUser(
-        allocator: std.mem.Allocator,
-        request: service_mod.AddUserRequest,
-        store: *UserStore,
-    ) skir.MethodResult(service_mod.AddUserResponse) {
-        _ = allocator;
-
-        if (request.user.user_id == 0) {
-            return .{ .service_error = .{
-                .status_code = ._400_BadRequest,
-                .message = "invalid user id",
-            } };
-        }
-
-        // Clone into a fresh arena before taking the lock.
-        var arena = std.heap.ArenaAllocator.init(store.backing_allocator);
-        const user = request.user.clone(arena.allocator()) catch {
-            arena.deinit();
-            return .{ .unknown_error = "failed to clone user" };
-        };
-
-        store.mutex.lock();
-        const old = store.map.fetchPut(user.user_id, .{ .arena = arena, .user = user }) catch {
-            store.mutex.unlock();
-            arena.deinit();
-            return .{ .unknown_error = "failed to insert user" };
-        };
-        store.mutex.unlock();
-
-        // Free the displaced entry's arena outside the lock.
-        if (old) |entry| entry.value.arena.deinit();
-
-        std.debug.print("Added user {s} (id={d})\n", .{ user.name, user.user_id });
-
-        return .{ .ok = service_mod.AddUserResponse.default };
-    }
 };
+
+// Method impls match the signature expected by Service(*UserStore).addMethod:
+//   fn(std.mem.Allocator, Request, *UserStore) MethodResult(Response)
+
+fn getUser(
+    allocator: std.mem.Allocator,
+    request: service_mod.GetUserRequest,
+    store: *UserStore,
+) skir.MethodResult(service_mod.GetUserResponse) {
+    _ = allocator;
+    store.mutex.lock();
+    defer store.mutex.unlock();
+    const maybe_stored = store.map.getPtr(request.user_id);
+    return .{ .ok = .{ .user = if (maybe_stored) |s| s.user else null } };
+}
+
+fn addUser(
+    allocator: std.mem.Allocator,
+    request: service_mod.AddUserRequest,
+    store: *UserStore,
+) skir.MethodResult(service_mod.AddUserResponse) {
+    _ = allocator;
+
+    if (request.user.user_id == 0) {
+        return .{ .service_error = .{
+            .status_code = ._400_BadRequest,
+            .message = "invalid user id",
+        } };
+    }
+
+    // Clone into a fresh arena before taking the lock.
+    var arena = std.heap.ArenaAllocator.init(store.backing_allocator);
+    const user = request.user.clone(arena.allocator()) catch {
+        arena.deinit();
+        return .{ .unknown_error = "failed to clone user" };
+    };
+
+    store.mutex.lock();
+    const old = store.map.fetchPut(user.user_id, .{ .arena = arena, .user = user }) catch {
+        store.mutex.unlock();
+        arena.deinit();
+        return .{ .unknown_error = "failed to insert user" };
+    };
+    store.mutex.unlock();
+
+    // Free the displaced entry's arena outside the lock.
+    if (old) |entry| entry.value.arena.deinit();
+
+    std.debug.print("Added user {s} (id={d})\n", .{ user.name, user.user_id });
+
+    return .{ .ok = service_mod.AddUserResponse.default };
+}
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -96,13 +96,13 @@ pub fn main() !void {
         service_mod.GetUserRequest,
         service_mod.GetUserResponse,
         &service_mod.get_user_method(),
-        UserStore.getUser,
+        getUser,
     );
     _ = try service.addMethod(
         service_mod.AddUserRequest,
         service_mod.AddUserResponse,
         &service_mod.add_user_method(),
-        UserStore.addUser,
+        addUser,
     );
 
     const listen_address = try std.net.Address.parseIp("0.0.0.0", 8787);
