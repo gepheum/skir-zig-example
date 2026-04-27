@@ -3,42 +3,106 @@ const skir = @import("skir_client.zig");
 const service_mod = @import("skirout/service.zig");
 const user_mod = @import("skirout/user.zig");
 
-const UserStore = std.AutoHashMap(i32, user_mod.User);
+const StoredUser = struct {
+    arena: std.heap.ArenaAllocator,
+    user: user_mod.User,
+};
 
-var g_store: *UserStore = undefined;
-var g_store_allocator: std.mem.Allocator = undefined;
+const UserStore = struct {
+    mutex: std.Thread.Mutex = .{},
+    backing_allocator: std.mem.Allocator,
+    map: std.AutoHashMap(i32, StoredUser),
+
+    fn init(allocator: std.mem.Allocator) UserStore {
+        return .{
+            .backing_allocator = allocator,
+            .map = std.AutoHashMap(i32, StoredUser).init(allocator),
+        };
+    }
+
+    fn deinit(self: *UserStore) void {
+        var it = self.map.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.arena.deinit();
+        }
+        self.map.deinit();
+    }
+
+    // Impl functions below match the signature expected by Service(*UserStore).addMethod:
+    //   fn(std.mem.Allocator, Request, *UserStore) MethodResult(Response)
+
+    fn getUser(
+        allocator: std.mem.Allocator,
+        request: service_mod.GetUserRequest,
+        store: *UserStore,
+    ) skir.MethodResult(service_mod.GetUserResponse) {
+        _ = allocator;
+        store.mutex.lock();
+        defer store.mutex.unlock();
+        const maybe_stored = store.map.getPtr(request.user_id);
+        return .{ .ok = .{ .user = if (maybe_stored) |s| s.user else null } };
+    }
+
+    fn addUser(
+        allocator: std.mem.Allocator,
+        request: service_mod.AddUserRequest,
+        store: *UserStore,
+    ) skir.MethodResult(service_mod.AddUserResponse) {
+        _ = allocator;
+
+        if (request.user.user_id == 0) {
+            return .{ .service_error = .{
+                .status_code = ._400_BadRequest,
+                .message = "invalid user id",
+            } };
+        }
+
+        // Clone into a fresh arena before taking the lock.
+        var arena = std.heap.ArenaAllocator.init(store.backing_allocator);
+        const user = request.user.clone(arena.allocator()) catch {
+            arena.deinit();
+            return .{ .unknown_error = "failed to clone user" };
+        };
+
+        store.mutex.lock();
+        const old = store.map.fetchPut(user.user_id, .{ .arena = arena, .user = user }) catch {
+            store.mutex.unlock();
+            arena.deinit();
+            return .{ .unknown_error = "failed to insert user" };
+        };
+        store.mutex.unlock();
+
+        // Free the displaced entry's arena outside the lock.
+        if (old) |entry| entry.value.arena.deinit();
+
+        std.debug.print("Added user {s} (id={d})\n", .{ user.name, user.user_id });
+
+        return .{ .ok = service_mod.AddUserResponse.default };
+    }
+};
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var store = UserStore.init(allocator);
-    defer {
-        var it = store.iterator();
-        while (it.next()) |entry| {
-            freeUser(allocator, entry.value_ptr.*);
-        }
-        store.deinit();
-    }
+    var user_store = UserStore.init(allocator);
+    defer user_store.deinit();
 
-    g_store = &store;
-    g_store_allocator = allocator;
-
-    var service = try skir.Service(void).init(allocator);
+    var service = try skir.Service(*UserStore).init(allocator);
     defer service.deinit();
 
     _ = try service.addMethod(
         service_mod.GetUserRequest,
         service_mod.GetUserResponse,
         &service_mod.get_user_method(),
-        getUserImpl,
+        UserStore.getUser,
     );
     _ = try service.addMethod(
         service_mod.AddUserRequest,
         service_mod.AddUserResponse,
         &service_mod.add_user_method(),
-        addUserImpl,
+        UserStore.addUser,
     );
 
     const listen_address = try std.net.Address.parseIp("0.0.0.0", 8787);
@@ -50,55 +114,14 @@ pub fn main() !void {
     while (true) {
         var conn = try server.accept();
         defer conn.stream.close();
-        try handleConnection(allocator, &service, conn.stream);
+        try handleConnection(allocator, &service, &user_store, conn.stream);
     }
-}
-
-fn getUserImpl(
-    allocator: std.mem.Allocator,
-    request: service_mod.GetUserRequest,
-    _: void,
-) skir.MethodResult(service_mod.GetUserResponse) {
-    _ = allocator;
-    const maybe_user = g_store.get(request.user_id);
-    return .{ .ok = .{ .user = maybe_user } };
-}
-
-fn addUserImpl(
-    allocator: std.mem.Allocator,
-    request: service_mod.AddUserRequest,
-    _: void,
-) skir.MethodResult(service_mod.AddUserResponse) {
-    _ = allocator;
-
-    if (request.user.user_id == 0) {
-        return .{ .service_error = .{
-            .status_code = ._400_BadRequest,
-            .message = "invalid user id",
-        } };
-    }
-
-    const copied_user = cloneUser(g_store_allocator, request.user) catch {
-        return .{ .unknown_error = "failed to clone user" };
-    };
-
-    const old = g_store.fetchPut(copied_user.user_id, copied_user) catch {
-        freeUser(g_store_allocator, copied_user);
-        return .{ .unknown_error = "failed to insert user" };
-    };
-
-    if (old) |entry| {
-        freeUser(g_store_allocator, entry.value);
-    }
-
-    std.debug.print("Added user {s} (id={d})\n", .{ copied_user.name, copied_user.user_id });
-
-    return .{ .ok = service_mod.AddUserResponse.default };
 }
 
 fn handleConnection(
     allocator: std.mem.Allocator,
-    service: *const skir.Service(void),
+    service: *const skir.Service(*UserStore),
+    user_store: *UserStore,
     stream: std.net.Stream,
 ) !void {
     var request_arena = std.heap.ArenaAllocator.init(allocator);
@@ -153,7 +176,7 @@ fn handleConnection(
         return;
     };
 
-    const raw_response = try service.handleRequest(request_allocator, body_for_service, {});
+    const raw_response = try service.handleRequest(request_allocator, body_for_service, user_store);
     try writeRawResponse(stream, raw_response);
 }
 
@@ -241,51 +264,4 @@ fn writePlainTextResponse(
 
     try stream.writeAll(header);
     try stream.writeAll(body);
-}
-
-fn cloneUser(allocator: std.mem.Allocator, user: user_mod.User) !user_mod.User {
-    const name = try allocator.dupe(u8, user.name);
-    errdefer allocator.free(name);
-
-    const quote = try allocator.dupe(u8, user.quote);
-    errdefer allocator.free(quote);
-
-    var pets = try allocator.alloc(user_mod.User.Pet, user.pets.len);
-    errdefer allocator.free(pets);
-
-    var i: usize = 0;
-    errdefer {
-        while (i > 0) {
-            i -= 1;
-            allocator.free(pets[i].name);
-            allocator.free(pets[i].picture);
-        }
-    }
-
-    while (i < user.pets.len) : (i += 1) {
-        const pet = user.pets[i];
-        pets[i] = .{
-            .name = try allocator.dupe(u8, pet.name),
-            .height_in_meters = pet.height_in_meters,
-            .picture = try allocator.dupe(u8, pet.picture),
-        };
-    }
-
-    return .{
-        .user_id = user.user_id,
-        .name = name,
-        .quote = quote,
-        .pets = pets,
-        .subscription_status = user.subscription_status,
-    };
-}
-
-fn freeUser(allocator: std.mem.Allocator, user: user_mod.User) void {
-    allocator.free(user.name);
-    allocator.free(user.quote);
-    for (user.pets) |pet| {
-        allocator.free(pet.name);
-        allocator.free(pet.picture);
-    }
-    allocator.free(user.pets);
 }

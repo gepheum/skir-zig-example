@@ -26,21 +26,28 @@ pub fn main() !void {
             ._unrecognized = null,
         }},
         .subscription_status = .Free,
-        ._unrecognized = null,
+        ._unrecognized = null, // Present in every struct; always set to null
     };
 
     std.debug.print("{s}\n", .{john.name});
     // John Doe
 
-    // Default value for a generated struct.
-    const jane = user_mod.User.default;
+    // To create a value with only some fields set, start from the default
+    // and override what you need. All other fields keep their default values.
+    var jane = user_mod.User.default;
+    jane.name = "Jane";
+    jane.quote = "I came, I saw, I deleted the cache.";
     std.debug.print("{s}\n", .{jane.name});
-    // (empty string)
+    // Jane
     std.debug.print("{d}\n", .{jane.user_id});
     // 0
 
-    // Modified copy (value semantics).
-    var evil_john = john;
+    // For a shallow copy, use a plain assignment.
+    var evil_jane = jane;
+    evil_jane.name = "Evil Jane";
+
+    // For a deep copy, use clone().
+    var evil_john = try john.clone(allocator);
     evil_john.name = "Evil John";
     evil_john.quote = "I solemnly swear I am up to no good.";
 
