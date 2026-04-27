@@ -12,6 +12,9 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
     const client = try skir.ServiceClient.init(allocator, "http://localhost:8787/myapi");
     defer client.deinit();
 
@@ -26,8 +29,8 @@ pub fn main() !void {
         ._unrecognized = null,
     };
 
-    try addUser(client, john);
-    try addUser(client, user_mod.tarzan_const);
+    try addUser(client, john, arena.allocator());
+    try addUser(client, user_mod.tarzan_const, arena.allocator());
 
     std.debug.print("Done\n", .{});
 
@@ -36,6 +39,7 @@ pub fn main() !void {
         ._unrecognized = null,
     };
     const get_result = try client.invokeRemote(
+        arena.allocator(),
         service_mod.GetUserRequest,
         service_mod.GetUserResponse,
         &service_mod.get_user_method(),
@@ -66,12 +70,13 @@ pub fn main() !void {
     }
 }
 
-fn addUser(client: *const skir.ServiceClient, user: user_mod.User) !void {
+fn addUser(client: *const skir.ServiceClient, user: user_mod.User, arena_allocator: std.mem.Allocator) !void {
     const request: service_mod.AddUserRequest = .{
         .user = user,
         ._unrecognized = null,
     };
     const result = try client.invokeRemote(
+        arena_allocator,
         service_mod.AddUserRequest,
         service_mod.AddUserResponse,
         &service_mod.add_user_method(),
