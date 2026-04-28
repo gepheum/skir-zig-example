@@ -102,18 +102,8 @@ pub fn main() !void {
     var service = try skir.Service(*UserStore).init(allocator);
     defer service.deinit();
 
-    _ = try service.addMethod(
-        service_mod.GetUserRequest,
-        service_mod.GetUserResponse,
-        &service_mod.get_user_method(),
-        getUser,
-    );
-    _ = try service.addMethod(
-        service_mod.AddUserRequest,
-        service_mod.AddUserResponse,
-        &service_mod.add_user_method(),
-        addUser,
-    );
+    _ = try service.addMethod(service_mod.get_user_method(), getUser);
+    _ = try service.addMethod(service_mod.add_user_method(), addUser);
 
     var app = App{
         .service = &service,

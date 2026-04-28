@@ -40,10 +40,8 @@ pub fn main() !void {
     };
     const get_result = try client.invokeRemote(
         arena.allocator(),
-        service_mod.GetUserRequest,
-        service_mod.GetUserResponse,
-        &service_mod.get_user_method(),
-        &get_request,
+        service_mod.get_user_method(),
+        get_request,
     );
 
     switch (get_result) {
@@ -81,10 +79,8 @@ fn addUser(
     };
     const result = try client.invokeRemote(
         arena_allocator,
-        service_mod.AddUserRequest,
-        service_mod.AddUserResponse,
-        &service_mod.add_user_method(),
-        &request,
+        service_mod.add_user_method(),
+        request,
     );
 
     switch (result) {
