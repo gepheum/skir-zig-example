@@ -4,7 +4,7 @@
 
 const std = @import("std");
 const httpz = @import("httpz");
-const skir = @import("skir_client.zig");
+const skir = @import("skir_client");
 const service_mod = @import("skirout/service.zig");
 const user_mod = @import("skirout/user.zig");
 

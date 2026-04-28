@@ -3,7 +3,7 @@
 // Run with: zig build run
 
 const std = @import("std");
-const skir = @import("skir_client.zig");
+const skir = @import("skir_client");
 const user_mod = @import("skirout/user.zig");
 const service_mod = @import("skirout/service.zig");
 

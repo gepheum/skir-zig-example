@@ -3,7 +3,7 @@
 // 2) In another terminal: zig build run-call-service
 
 const std = @import("std");
-const skir = @import("skir_client.zig");
+const skir = @import("skir_client");
 const service_mod = @import("skirout/service.zig");
 const user_mod = @import("skirout/user.zig");
 
