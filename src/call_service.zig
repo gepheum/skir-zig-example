@@ -70,7 +70,11 @@ pub fn main() !void {
     }
 }
 
-fn addUser(client: *const skir.ServiceClient, user: user_mod.User, arena_allocator: std.mem.Allocator) !void {
+fn addUser(
+    client: *const skir.ServiceClient,
+    user: user_mod.User,
+    arena_allocator: std.mem.Allocator,
+) !void {
     const request: service_mod.AddUserRequest = .{
         .user = user,
         ._unrecognized = null,

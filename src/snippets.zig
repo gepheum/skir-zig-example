@@ -8,7 +8,9 @@ const user_mod = @import("skirout/user.zig");
 const service_mod = @import("skirout/service.zig");
 
 pub fn main() !void {
-    const allocator = std.heap.page_allocator;
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
 
     // =========================================================================
     // STRUCT TYPES
@@ -47,7 +49,7 @@ pub fn main() !void {
     evil_jane.name = "Evil Jane";
 
     // For a deep copy, use clone().
-    var evil_john = try john.clone(allocator);
+    var evil_john = try john.clone(arena_allocator);
     evil_john.name = "Evil John";
     evil_john.quote = "I solemnly swear I am up to no good.";
 
@@ -90,13 +92,19 @@ pub fn main() !void {
 
     const user_serializer = user_mod.User.serializer();
 
-    const john_dense_json = try user_serializer.serialize(allocator, john, .{ .format = .denseJson });
-    defer allocator.free(john_dense_json);
+    const john_dense_json = try user_serializer.serialize(
+        arena_allocator,
+        john,
+        .{ .format = .denseJson },
+    );
     std.debug.print("{s}\n", .{john_dense_json});
     // [42,"John Doe","Coffee is just a socially acceptable form of rage.",[["Dumbo",1,"🐘"]],1]
 
-    const john_readable_json = try user_serializer.serialize(allocator, john, .{ .format = .readableJson });
-    defer allocator.free(john_readable_json);
+    const john_readable_json = try user_serializer.serialize(
+        arena_allocator,
+        john,
+        .{ .format = .readableJson },
+    );
     std.debug.print("{s}\n", .{john_readable_json});
     // {
     //   "user_id": 42,
@@ -104,28 +112,41 @@ pub fn main() !void {
     //   ...
     // }
 
-    const john_binary = try user_serializer.serialize(allocator, john, .{ .format = .binary });
-    defer allocator.free(john_binary);
+    const john_binary = try user_serializer.serialize(
+        arena_allocator,
+        john,
+        .{ .format = .binary },
+    );
 
     // deserialize() auto-detects the format (dense JSON, readable JSON, or
     // binary) from the input bytes — the same call works for all three.
-    // Pass an arena allocator; the entire deserialized value is freed at once
-    // by calling arena.deinit().
-    var deserialize_arena = std.heap.ArenaAllocator.init(allocator);
-    defer deserialize_arena.deinit();
+    // Pass an arena allocator; everything allocated through it is freed at
+    // once by calling arena.deinit().
 
     // Deserialize from dense JSON.
-    const from_dense = try user_serializer.deserialize(deserialize_arena.allocator(), john_dense_json, .{});
+    const from_dense = try user_serializer.deserialize(
+        arena_allocator,
+        john_dense_json,
+        .{},
+    );
     std.debug.print("{s}\n", .{from_dense.name});
     // John Doe
 
     // Deserialize from readable JSON — same call, different bytes.
-    const from_readable = try user_serializer.deserialize(deserialize_arena.allocator(), john_readable_json, .{});
+    const from_readable = try user_serializer.deserialize(
+        arena_allocator,
+        john_readable_json,
+        .{},
+    );
     std.debug.print("{s}\n", .{from_readable.name});
     // John Doe
 
     // Deserialize from binary — same call again.
-    const from_binary = try user_serializer.deserialize(deserialize_arena.allocator(), john_binary, .{});
+    const from_binary = try user_serializer.deserialize(
+        arena_allocator,
+        john_binary,
+        .{},
+    );
     std.debug.print("{s}\n", .{from_binary.name});
     // John Doe
 
@@ -133,26 +154,69 @@ pub fn main() !void {
     // PRIMITIVE SERIALIZERS
     // =========================================================================
 
-    try printSerialized("bool", skir.boolSerializer(), true);
-    try printSerialized("int32", skir.int32Serializer(), @as(i32, 3));
-    try printSerialized("int64", skir.int64Serializer(), @as(i64, 9_223_372_036_854_775_807));
-    try printSerialized("hash64", skir.hash64Serializer(), @as(u64, 18_446_744_073_709_551_615));
-    try printSerialized("timestamp", skir.timestampSerializer(), skir.Timestamp{ .unix_millis = 1_743_682_787_000 });
-    try printSerialized("float32", skir.float32Serializer(), @as(f32, 3.14));
-    try printSerialized("float64", skir.float64Serializer(), @as(f64, 3.14));
-    try printSerialized("string", skir.stringSerializer(), "Foo");
-    try printSerialized("bytes", skir.bytesSerializer(), @as([]const u8, &.{ 1, 2, 3 }));
+    _ = try skir.boolSerializer().serialize(
+        arena_allocator,
+        true,
+        .{ .format = .denseJson },
+    );
+    _ = try skir.int32Serializer().serialize(
+        arena_allocator,
+        @as(i32, 3),
+        .{ .format = .denseJson },
+    );
+    _ = try skir.int64Serializer().serialize(
+        arena_allocator,
+        @as(i64, 9_223_372_036_854_775_807),
+        .{ .format = .denseJson },
+    );
+    _ = try skir.hash64Serializer().serialize(
+        arena_allocator,
+        @as(u64, 18_446_744_073_709_551_615),
+        .{ .format = .denseJson },
+    );
+    _ = try skir.timestampSerializer().serialize(
+        arena_allocator,
+        skir.Timestamp{ .unix_millis = 1_743_682_787_000 },
+        .{ .format = .denseJson },
+    );
+    _ = try skir.float32Serializer().serialize(
+        arena_allocator,
+        @as(f32, 3.14),
+        .{ .format = .denseJson },
+    );
+    _ = try skir.float64Serializer().serialize(
+        arena_allocator,
+        @as(f64, 3.14),
+        .{ .format = .denseJson },
+    );
+    _ = try skir.stringSerializer().serialize(
+        arena_allocator,
+        "Foo",
+        .{ .format = .denseJson },
+    );
+    _ = try skir.bytesSerializer().serialize(
+        arena_allocator,
+        @as([]const u8, &.{ 1, 2, 3 }),
+        .{ .format = .denseJson },
+    );
 
     // =========================================================================
     // COMPOSITE SERIALIZERS
     // =========================================================================
 
     const opt_string_ser = skir.optionalSerializer(skir.stringSerializer());
-    try printSerialized("optional some", opt_string_ser, @as(?[]const u8, "foo"));
-    try printSerialized("optional none", opt_string_ser, @as(?[]const u8, null));
+    _ = try opt_string_ser.serialize(
+        arena_allocator,
+        @as(?[]const u8, null),
+        .{ .format = .denseJson },
+    );
 
     const bool_array_ser = skir.arraySerializer(skir.boolSerializer());
-    try printSerialized("bool array", bool_array_ser, @as([]const bool, &.{ true, false }));
+    _ = try bool_array_ser.serialize(
+        arena_allocator,
+        @as([]const bool, &.{ true, false }),
+        .{ .format = .denseJson },
+    );
 
     // =========================================================================
     // CONSTANTS
@@ -162,8 +226,11 @@ pub fn main() !void {
     std.debug.print("{s}\n", .{tarzan.name});
     // Tarzan
 
-    const tarzan_json = try user_serializer.serialize(allocator, tarzan, .{ .format = .readableJson });
-    defer allocator.free(tarzan_json);
+    const tarzan_json = try user_serializer.serialize(
+        arena_allocator,
+        tarzan,
+        .{ .format = .readableJson },
+    );
     std.debug.print("{s}\n", .{tarzan_json});
     // {
     //   "user_id": 123,
@@ -177,23 +244,22 @@ pub fn main() !void {
 
     var users = [_]user_mod.User{ john, jane, evil_john, tarzan };
     var registry = user_mod.UserRegistry{
-        .users = skir.KeyedArray(user_mod.User.By_UserId).init(allocator, users[0..]),
+        .users = skir.KeyedArray(user_mod.User.By_UserId).init(
+            arena_allocator,
+            users[0..],
+        ),
         ._unrecognized = null,
     };
-    // For a KeyedArray built manually like this, call deinit() to free its
-    // index storage. If the KeyedArray comes from deserialize() with an arena,
-    // the index memory is released when that arena is deinitialized.
-    defer registry.users.deinit();
 
-    const found_43 = try registry.users.findByKey(43);
-    std.debug.print("{}\n", .{found_43 == null});
-    // true
-
-    const found_42 = try registry.users.findByKey(42);
-    if (found_42) |u| {
+    const found = try registry.users.findByKey(42);
+    if (found) |u| {
         std.debug.print("{s}\n", .{u.name});
         // Evil John (last duplicate wins)
     }
+
+    const not_found = try registry.users.findByKey(43);
+    std.debug.print("{}\n", .{not_found == null});
+    // true
 
     const found_or_default = try registry.users.findByKeyOrDefault(999);
     std.debug.print("{d}\n", .{found_or_default.pets.len});
@@ -216,7 +282,8 @@ pub fn main() !void {
         else => {},
     }
 
-    const enum_type_descriptor = user_mod.SubscriptionStatus.serializer().typeDescriptor();
+    const enum_type_descriptor =
+        user_mod.SubscriptionStatus.serializer().typeDescriptor();
     switch (enum_type_descriptor) {
         .enum_record => |ed| {
             std.debug.print("{s} has {d} variants\n", .{ ed.name, ed.variants.len });
@@ -240,11 +307,4 @@ fn subscriptionInfoText(status: user_mod.SubscriptionStatus) []const u8 {
         },
         .Premium => "Premium user",
     };
-}
-
-fn printSerialized(label: []const u8, serializer: anytype, value: @TypeOf(serializer).Value) !void {
-    const allocator = std.heap.page_allocator;
-    const dense = try serializer.serialize(allocator, value, .{ .format = .denseJson });
-    defer allocator.free(dense);
-    std.debug.print("{s}: {s}\n", .{ label, dense });
 }
